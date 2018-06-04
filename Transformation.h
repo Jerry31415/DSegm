@@ -1,7 +1,11 @@
-#include <opencv2\core.hpp>
-#include <vector>
+#pragma warning(disable : 4996)
+#pragma warning(disable: 4800) // 'int' : forcing value to bool 'true' or 'false'...
 
+
+#include <stdio.h>
+#include <vector>
 #include <iostream>
+#include <opencv2\core.hpp>
 
 // интерфейс для преобразований
 // все классы реализуюемые данный интерфейс должны содержать методы apply и calc
@@ -16,6 +20,9 @@ class Transformation : public std::vector<double>{
 
 		virtual cv::Point2d apply(const cv::Point2d&) = 0;
 		virtual void calc(const cv::Mat&, const std::vector<cv::Point2d>&) = 0;
+		virtual void copyFrom(const std::vector<double>& tr) = 0;
+		virtual void copyTo(std::vector<double>& tr) = 0;
+		virtual std::string toString() = 0;
 };
 
 // Преобразование - сдвиг
@@ -29,6 +36,22 @@ class ShiftTransformation : public Transformation{
 		ShiftTransformation(const std::vector<double>& tr){
 			resize(2, 0);
 			std::copy(tr.begin(), tr.begin() + 2, begin());
+		}
+
+		void copyFrom(const std::vector<double>& tr) {
+			resize(2, 0);
+			std::copy(tr.begin(), tr.begin() + 2, begin());
+		}
+
+		void copyTo(std::vector<double>& tr) {
+			tr.resize(2, 0);
+			std::copy(begin(), begin() + 2, tr.begin());
+		}
+
+		std::string toString() {
+			char buf[256];
+			sprintf(buf, "(%8.2f, %8.2f)", at(0), at(1));
+			return (std::string)buf;
 		}
 
 		cv::Point2d apply(const cv::Point2d& p){
@@ -59,6 +82,23 @@ class AffineTransformation : public Transformation{
 			resize(6, 0);
 			std::copy(tr.begin(), tr.begin()+6, begin());
 		}
+
+		void copyFrom(const std::vector<double>& tr) {
+			resize(6, 0);
+			std::copy(tr.begin(), tr.begin() + 6, begin());
+		}
+
+		void copyTo(std::vector<double>& tr) {
+			tr.resize(6, 0);
+			std::copy(begin(), begin() + 6, tr.begin());
+		}
+
+		std::string toString() {
+			char buf[256];
+			sprintf(buf, "(%8.5f %8.5f %8.2f, %8.5f %8.5f %8.2f)", at(0), at(1), at(2), at(3), at(4), at(5));
+			return (std::string)buf;
+		}
+
 
 		cv::Point2d apply(const cv::Point2d& p){
 			return cv::Point2d(at(0) * p.x + at(1) * p.y + at(2), at(3) * p.x + at(4) * p.y + at(5));
@@ -130,6 +170,23 @@ class ProjectiveTransformation : public Transformation{
 		resize(9, 0);
 		std::copy(tr.begin(), tr.begin() + 9, begin());
 	}
+
+	void copyFrom(const std::vector<double>& tr) {
+		resize(9, 0);
+		std::copy(tr.begin(), tr.begin() + 9, begin());
+	}
+
+	void copyTo(std::vector<double>& tr) {
+		tr.resize(6, 0);
+		std::copy(begin(), begin() + 6, tr.begin());
+	}
+
+	std::string toString() {
+		char buf[256];
+		sprintf(buf, "(%8.5f %8.5f %8.2f, %8.5f %8.5f %8.2f, %8.5f %8.5f %8.2f)", at(0), at(1), at(2), at(3), at(4), at(5), at(6), at(7), at(8));
+		return (std::string)buf;
+	}
+
 
 	cv::Point2d apply(const cv::Point2d& p){
 		double dev = at(6) * p.x + at(7) * p.y + at(8);

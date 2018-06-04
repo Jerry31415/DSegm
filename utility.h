@@ -1,3 +1,7 @@
+#pragma warning(disable : 4996)
+#pragma warning(disable: 4800) // 'int' : forcing value to bool 'true' or 'false'...
+
+
 #include <set>
 #include <vector>
 #include "opencv2\core\mat.hpp"

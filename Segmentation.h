@@ -1,7 +1,9 @@
-#include "Transformation.h"
-#include "utility.h"
-#include "opencv2\imgproc.hpp"
-#include "opencv2\video\tracking.hpp"
+#pragma warning(disable : 4244)
+#pragma warning(disable : 4267)
+#pragma warning(disable : 4996)
+#pragma warning(disable: 4800) // 'int' : forcing value to bool 'true' or 'false'...
+
+#include <stdio.h>
 
 #include <iostream>
 #include <memory>
@@ -9,6 +11,12 @@
 
 #include <chrono>
 #include <ctime>
+
+#include "opencv2\imgproc.hpp"
+#include "opencv2\video\tracking.hpp"
+
+#include "Transformation.h"
+#include "utility.h"
 
 using namespace cv;
 
@@ -46,9 +54,18 @@ class Segment{
 		~Segment(){
 		}
 
-		void UpdateTransform(const Mat& flow){
+		void UpdateTransform(const Mat& flow, const Mat& fr0, const Mat& fr1){
+			std::vector<double> tmpV;
 			if (!seg.empty()){
+				double Q0 = Q(fr0, fr1);
+				tr->copyTo(tmpV);
 				tr->calc(flow, seg);
+				double Q1 = Q(fr0, fr1);
+				//std::cout << "Q0=" << Q0 << "; Q1=" << Q1 << "\n";
+				if (Q1 > Q0) {
+					tr->copyFrom(tmpV);
+					//std::cout << "Q0=" << Q0 << "; Q1=" << Q1 << tr->toString() <<  "\n";
+				}
 			}
 			else {
 				throw std::runtime_error("Error: empty segment");
@@ -87,8 +104,9 @@ class Segment{
 					}
 				}
 			}
-			sum /= (cnt * 3);
-			return (cnt == 0) ? 99999 : sum;
+			if (cnt == 0) return 9999;
+			sum = sqrt(sum/(cnt * 3.));
+			return sum;
 		}
 
 		double Q(const Mat& fr0, const Mat& fr1, Transformation* trans){
@@ -113,9 +131,11 @@ class Segment{
 					}
 				}
 			}
-			sum /= (cnt * 3);
-			return (cnt == 0) ? 99999 : sum;
-		}		
+			if (cnt == 0) return 9999;
+			sum = sqrt(sum / (cnt * 3.));
+			return sum;
+		}
+
 };
 
 #ifdef SHOW_SMAT
@@ -128,7 +148,8 @@ void ShowSegMatrix(Mat& fr0, std::vector<Segment<TRANSFORM_TYPE>>& SegList){
 #endif
 
 template<typename TRANSFORM_TYPE>
-double PointQuality(const Mat& fr0, const Mat& fr1, const Point2d& p, std::vector<Segment<TRANSFORM_TYPE>>& SegList, int index){
+double PointQuality(const Mat& fr0, const Mat& fr1, const Point2d& p, 
+	std::vector<Segment<TRANSFORM_TYPE>>& SegList, int index){
 	if (p.x >= fr0.cols || p.x < 0 || p.y >= fr0.rows || p.y < 0) return -1;
 	double t = 0;
 	Point2d new_p = SegList[index].tr->apply(p);
@@ -212,7 +233,8 @@ void BuildMatFromSegmentList(Mat& seg, Size mat_size, std::vector<Segment<TRANSF
 
 // Построение списка сегментов из матрицы сегментации
 template<typename TRANSFORM_TYPE>
-void BuildSegmentListFromMat(Mat& seg, std::vector<Segment<TRANSFORM_TYPE>>& SegList, Mat& flow){
+void BuildSegmentListFromMat(Mat& seg, std::vector<Segment<TRANSFORM_TYPE>>& SegList, Mat& flow,
+	const Mat& fr0, const Mat& fr1){
 	// Calc new size of transform list
 	int max_index(-1), min_index(99999999), tmp_val;
 	for (int i = 0; i < seg.rows; ++i){
@@ -241,7 +263,7 @@ void BuildSegmentListFromMat(Mat& seg, std::vector<Segment<TRANSFORM_TYPE>>& Seg
 		}
 	}
 	for (int i = 0; i < SegList.size();++i){
-		SegList[i].UpdateTransform(flow);
+		SegList[i].UpdateTransform(flow, fr0, fr1);
 	}
 }
 
@@ -253,7 +275,7 @@ double CalcQuality(const Mat& fr0, const Mat& fr1, Mat& seg){
 	cvtColor(fr0, g0, COLOR_BGR2GRAY);
 	cvtColor(fr1, g1, COLOR_BGR2GRAY);
 	calcOpticalFlowFarneback(g0, g1, flow, 0.4, 1, 16, 25, 5, 1.1, OPTFLOW_FARNEBACK_GAUSSIAN);
-	BuildSegmentListFromMat<TRANSFORM_TYPE>(seg, SegList, flow);
+	BuildSegmentListFromMat<TRANSFORM_TYPE>(seg, SegList, flow, fr0, fr1);
 	double Q(0), PQ(0), cnt(0);
 	for (int i = 0; i < fr0.rows; ++i){
 		for (int j = 0; j < fr0.cols; ++j){
@@ -293,7 +315,8 @@ void TransferPoints(std::vector<Segment<TRANSFORM_TYPE>>& tr, int index_from, in
 
 // Вычисление начальной сегментации. Разбиение на прямоугольники размера i_step x j_step
 template<typename TRANSFORM_TYPE>
-void Init(Mat& fr0, Mat& fr1, const Mat& flow, Mat& seg, std::vector<Segment<TRANSFORM_TYPE>>& SLst, const int& i_step, const int& j_step){
+void Init(Mat& fr0, Mat& fr1, const Mat& flow, Mat& seg, 
+	std::vector<Segment<TRANSFORM_TYPE>>& SLst, const int& i_step, const int& j_step){
 	seg = Mat::zeros(fr0.size(), CV_32SC1);
 	for (int i = 0; i < fr0.rows; i += i_step){
 		for (int j = 0; j < fr0.cols; j += j_step){
@@ -304,14 +327,15 @@ void Init(Mat& fr0, Mat& fr1, const Mat& flow, Mat& seg, std::vector<Segment<TRA
 		}
 	}
 	for (int i = 0; i < SLst.size(); ++i){
-		SLst[i].UpdateTransform(flow);
+		SLst[i].UpdateTransform(flow, fr0, fr1);
 	}
 }
 
 //Склейка сегментов (список)
 // nIndexes - список смежности
 template<typename TRANSFORM_TYPE>
-int Merging(const Mat& fr0, const Mat& fr1, Mat& flow, std::vector<Segment<TRANSFORM_TYPE>>& Segm, std::vector<std::set<int>>& nIndexes, int min_size, double cost = 0){
+int Merging(const Mat& fr0, const Mat& fr1, Mat& flow, std::vector<Segment<TRANSFORM_TYPE>>& Segm, 
+	std::vector<std::set<int>>& nIndexes, int min_size, double cost = 0){
 	// Пробегаем по списку всех сегментов
 	// Начинаем с конца
 	double Qs, Qm, best_Q;
@@ -347,7 +371,7 @@ int Merging(const Mat& fr0, const Mat& fr1, Mat& flow, std::vector<Segment<TRANS
 			// Пересчитываем преобразование
 			//!!!!!!!!!!!
 			//if (Segm[i].seg.size()/(Segm[min_ind].seg.size()-Segm[i].seg.size())>0.05)
-			Segm[min_ind].UpdateTransform(flow);
+			Segm[min_ind].UpdateTransform(flow, fr0, fr1);
 			// Удаляем присоединенный сегмент из списка
 			Segm.erase(Segm.begin() + i);
 			// Обновляем список смежности
@@ -369,11 +393,47 @@ void UpdateSegmentList(Mat& seg, std::vector<Segment<TRANSFORM_TYPE>>& tr){
 	}
 }
 
+//-----------------------------------------------------------------------------
+// сравнение матрицы со списком сегментов
+template<typename TRANSFORM_TYPE>
+void testList(Mat& seg, std::vector<Segment<TRANSFORM_TYPE>>& trs) {
+	int cnt = 0;
+	for (int i = 0; i < trs.size(); ++i) {
+		int sz = trs[i].seg.size();
+		cnt += sz;
+		for (int j = 0; j < sz; j++) {
+			Point2d p = trs[i].seg[j];
+			int isg = seg.at<int>(p.y, p.x);
+			if (isg != i) {
+				std::cout << "Error in testList: i=" << i << ", isg="<<isg << ", p="<<p << "\n";
+			}
+		}
+	}
+}
+
+//-----------------------------------------------------------------------------
+// записать результаты в текстовый файл
+template<typename TRANSFORM_TYPE>
+void SaveRes(const char *fname, const char *msg, const Mat& fr0, const Mat& fr1,
+	Mat& seg, std::vector<Segment<TRANSFORM_TYPE>>& trs) {
+	FILE *f = fopen(fname, "a");
+	double Q = CalcQuality(fr0, fr1, seg, trs);
+	fprintf(f, "----------------------------\ninfo, nSegm=%d, Q=%8.2f, %s\n", (int)trs.size(), Q, msg);
+	for (int i = 0; i < trs.size(); ++i) {
+		int sz = trs[i].seg.size();
+		Q = trs[i].Q(fr0, fr1);
+		fprintf(f, "%4d, %6d, %7.2f, %s\n", i, sz, Q, trs[i].tr->toString().c_str());
+	}
+
+	fclose(f);
+}
+
 
 template<typename TRANSFORM_TYPE>
-int BordersUpdate(const Mat& fr0, const Mat& fr1, Mat& seg, Mat& flow, std::vector<Segment<TRANSFORM_TYPE>>& SegList, int min_size, int SR = 1){
+int BordersUpdate(const Mat& fr0, const Mat& fr1, Mat& seg, Mat& flow, 
+	std::vector<Segment<TRANSFORM_TYPE>>& SegList, int min_size, int SR = 1){
 	bool isChanged = false;
-	double Q, QM, L0, L1;
+	double Q, QM;
 	int ind, ind_src;
 	std::set<int> e;
 	Point2d p;
@@ -454,7 +514,7 @@ int BordersUpdate(const Mat& fr0, const Mat& fr1, Mat& seg, Mat& flow, std::vect
 			}
 		}
 	}
-	std::cout << "Borders Update: " << cnt << " - cnt\r";
+	//std::cout << "Borders Update: " << cnt << " - cnt\n";
 	UpdateSegmentList(seg, SegList);
 
 	int size = SegList.size();
@@ -494,6 +554,11 @@ void Segmentation(Mat& fr0, Mat& fr1, SegInfo& info, int min_seg_size, double TR
 	std::vector<std::set<int>> nIndexes;
 	BuildMatFromSegmentList(seg, fr0.size(), SegList);
 	UpdateTopology(nIndexes, seg, top);
+
+	FILE *f = fopen("res.txt", "w"); fclose(f);
+
+	testList(seg, SegList);
+	SaveRes("res.txt", "init", fr0, fr1, seg, SegList);
 	
 	bool merged ;
 	int cnt_merged;
@@ -518,18 +583,28 @@ void Segmentation(Mat& fr0, Mat& fr1, SegInfo& info, int min_seg_size, double TR
 		ShowSegMatrix(fr0, SegList);
 		#endif
 		
+		SaveRes("res.txt", "After merge", fr0, fr1, seg, SegList);
+
 		std::cout << "Q=" << CalcQuality(fr0, fr1, seg, SegList) << " N=" << SegList.size() << "\n";
 
-		while (BordersUpdate(fr0, fr1, seg, flow, SegList, min_seg_size, 1)>100){	
-			std::cout << "Q=" << CalcQuality(fr0, fr1, seg, SegList) << " N=" << SegList.size() << "\n";
+		while (BordersUpdate(fr0, fr1, seg, flow, SegList, min_seg_size, 1)>100){
+			std::cout << "Q=" << CalcQuality(fr0, fr1, seg, SegList) << " N=" << SegList.size() << " \n";
 		}
+		SaveRes("res.txt", "After Border update", fr0, fr1, seg, SegList);
+		std::cout << "Q1:" << (Q1 = CalcQuality(fr0, fr1, seg, SegList)) << "\n";
+		
+//		BuildSegmentListFromMat(seg, SegList, flow, fr0, fr1);
+		UpdateSegmentList(seg, SegList); 
+		testList(seg, SegList);
 
-		BuildSegmentListFromMat(seg, SegList, flow);
+
+		SaveRes("res.txt", "After Border update3", fr0, fr1, seg, SegList);
 		UpdateTopology(nIndexes, seg, top);
 
+		SaveRes("res.txt", "After Border update4", fr0, fr1, seg, SegList);
 		std::cout << "Q1=" << (Q1=CalcQuality(fr0, fr1, seg, SegList)) << "\n";
 		std::cout << "Cost = " << cost << " cnt_merged=" << cnt_merged << "\n";
-		
+
 		#ifdef SHOW_SMAT
 		ShowSegMatrix(fr0, SegList);
 		#endif
